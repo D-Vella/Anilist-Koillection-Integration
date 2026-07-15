@@ -25,16 +25,32 @@ query ($search: String, $perPage: Int) {
       title { romaji english native }
       description(asHtml: false)
       coverImage { extraLarge large }
+      status
+      averageScore
       siteUrl
     }
   }
 }
 """
 
+STATUS_LABELS = {
+    "FINISHED": "Finished",
+    "RELEASING": "Releasing",
+    "NOT_YET_RELEASED": "Not Yet Released",
+    "CANCELLED": "Cancelled",
+    "HIATUS": "Hiatus",
+}
+
 _TAG_RE = re.compile(r"<[^>]+>")
 _BLANK_LINES_RE = re.compile(r"\n{3,}")
 _INLINE_SPACE_RE = re.compile(r"[ \t]+")
 _WORD_RE = re.compile(r"[^a-z0-9]+")
+
+
+def format_status(status: str | None) -> str:
+    if not status:
+        return ""
+    return STATUS_LABELS.get(status, status.replace("_", " ").title())
 
 
 def clean_description(text: str | None) -> str:
@@ -64,6 +80,8 @@ class MangaMatch:
     title: str
     description: str
     cover_image_url: str | None
+    status: str | None
+    average_score: int | None
     site_url: str
     score: float
 
@@ -123,6 +141,8 @@ class AnilistClient:
                     title=entry_title,
                     description=clean_description(entry.get("description")),
                     cover_image_url=cover.get("extraLarge") or cover.get("large"),
+                    status=entry.get("status"),
+                    average_score=entry.get("averageScore"),
                     site_url=entry.get("siteUrl", ""),
                     score=_similarity(title, entry_title),
                 )
