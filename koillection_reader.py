@@ -81,7 +81,7 @@ class KoillectionClient:
 
 
 class KoillectionReader:
-    """Read-only operations: finding a collection and listing its items."""
+    """Read-only operations: finding a collection and listing its sub-collections."""
 
     def __init__(self, client: KoillectionClient):
         self.client = client
@@ -97,11 +97,8 @@ class KoillectionReader:
 
         raise LookupError(f"No Koillection collection titled {name_or_id!r} was found")
 
-    def list_items(self, collection_id: str) -> list[dict[str, Any]]:
-        return list(self.client.paginate(f"/api/collections/{collection_id}/items"))
-    
     def list_child_collections(self, parent_id: str) -> list[dict[str, Any]]:
         return list(self.client.paginate(f"/api/collections/{parent_id}/children"))
 
-    def list_item_data(self, item_id: str) -> list[dict[str, Any]]:
-        return list(self.client.paginate(f"/api/items/{item_id}/data"))
+    def list_collection_data(self, collection_id: str) -> list[dict[str, Any]]:
+        return list(self.client.paginate(f"/api/collections/{collection_id}/data"))

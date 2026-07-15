@@ -1,20 +1,25 @@
-"""Control script: syncs a Koillection collection with AniList manga metadata.
+"""Control script: syncs Koillection series collections with AniList manga metadata.
 
-For every item in the configured Koillection collection, this looks up a
-matching manga on AniList and writes its cover image and description back
-to the item. Configure the .env file (see .env.example) before running:
+Koillection layout expected: a parent collection (e.g. "Manga") whose direct
+children are one sub-collection per series (e.g. "Manga/Fly Me to the
+Moon"), with owned volumes as items inside each series. AniList only has
+metadata at the series level, so for every child collection this looks up
+the matching manga on AniList and writes its cover image and a description
+(AniList synopsis + score + status + a retrieval footer) onto that series
+collection. Configure the .env file (see .env.example) before running:
 
     python main.py
     python main.py --yes            # accept the best AniList match automatically
-    python main.py --limit 5 -v     # try it on a handful of items first
+    python main.py --limit 5 -v     # try it on a handful of series first
 """
 from __future__ import annotations
 
 import argparse
 import logging
 import sys
+from datetime import date
 
-from anilist_client import AnilistClient, MangaMatch
+from anilist_client import AnilistClient, MangaMatch, format_status
 from config import Settings
 from koillection_reader import KoillectionClient, KoillectionReader
 from koillection_writer import KoillectionWriter
@@ -25,30 +30,30 @@ AUTO_MATCH_THRESHOLD = 0.9
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Sync a Koillection collection with AniList manga data.")
+    parser = argparse.ArgumentParser(description="Sync Koillection series collections with AniList manga data.")
     parser.add_argument(
         "--yes",
         action="store_true",
         help="Accept the best AniList match automatically instead of asking for confirmation.",
     )
-    parser.add_argument("--limit", type=int, default=None, help="Only process the first N items (for testing).")
+    parser.add_argument("--limit", type=int, default=None, help="Only process the first N series (for testing).")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging.")
     return parser.parse_args()
 
 
-def choose_match(item_name: str, matches: list[MangaMatch], auto: bool) -> MangaMatch | None:
+def choose_match(series_name: str, matches: list[MangaMatch], auto: bool) -> MangaMatch | None:
     if not matches:
-        logger.warning("No AniList results for %r", item_name)
+        logger.warning("No AniList results for %r", series_name)
         return None
 
     best = matches[0]
     if auto or best.score >= AUTO_MATCH_THRESHOLD:
         return best
 
-    print(f"\nItem: {item_name}")
+    print(f"\nSeries: {series_name}")
     for i, match in enumerate(matches, start=1):
         print(f"  [{i}] {match.title}  (match score {match.score:.2f})  {match.site_url}")
-    print("  [s] skip this item")
+    print("  [s] skip this series")
 
     choice = input("Pick a match: ").strip().lower()
     if choice in ("s", ""):
@@ -60,20 +65,36 @@ def choose_match(item_name: str, matches: list[MangaMatch], auto: bool) -> Manga
     except ValueError:
         pass
 
-    logger.warning("Invalid selection %r, skipping item", choice)
+    logger.warning("Invalid selection %r, skipping series", choice)
     return None
 
 
-def sync_item(
-    item: dict,
-    reader: KoillectionReader,
+def build_description(match: MangaMatch) -> str:
+    """Concatenate the AniList synopsis, score/status and a retrieval footer."""
+    parts = [match.description or "No description available."]
+
+    facts = []
+    if match.average_score is not None:
+        facts.append(f"Score: {match.average_score}/100")
+    status_label = format_status(match.status)
+    if status_label:
+        facts.append(f"Status: {status_label}")
+    if facts:
+        parts.append(" | ".join(facts))
+
+    parts.append(f"Data from AniList API retrieved {date.today().isoformat()}")
+    return "\n\n".join(parts)
+
+
+def sync_series(
+    series_collection: dict,
     writer: KoillectionWriter,
     anilist: AnilistClient,
     settings: Settings,
     auto_match: bool,
 ) -> bool:
-    name = item.get("name", "")
-    item_id = item["id"]
+    name = series_collection.get("title", "")
+    collection_id = series_collection["id"]
 
     matches = anilist.search_manga(name)
     match = choose_match(name, matches, auto=auto_match)
@@ -84,17 +105,15 @@ def sync_item(
         logger.info("[dry-run] Would update %r with AniList match %r", name, match.title)
         return True
 
-    needs_image = settings.overwrite_existing or not item.get("image")
+    needs_image = settings.overwrite_existing or not series_collection.get("image")
     if needs_image and match.cover_image_url:
         image_bytes = anilist.download_cover_image(match)
         if image_bytes:
             filename = match.cover_image_url.rsplit("/", 1)[-1] or f"{match.id}.jpg"
-            writer.upload_item_image(item_id, image_bytes, filename)
+            writer.upload_collection_image(collection_id, image_bytes, filename)
 
-    if match.description:
-        writer.upsert_description(item_id, match.description, overwrite=settings.overwrite_existing)
-    else:
-        logger.warning("AniList match %r has no description to write", match.title)
+    description = build_description(match)
+    writer.upsert_collection_description(collection_id, description, overwrite=settings.overwrite_existing)
 
     logger.info("Updated %r <- AniList #%s %r", name, match.id, match.title)
     return True
@@ -120,34 +139,24 @@ def main() -> int:
         timeout=settings.request_timeout,
     )
 
+    parent = reader.get_collection(settings.koillection_collection)
+    logger.info("Syncing series under %r (%s)", parent.get("title"), parent["id"])
+
+    series_list = reader.list_child_collections(parent["id"])
+    if args.limit:
+        series_list = series_list[: args.limit]
+    logger.info("Found %d series to process", len(series_list))
+
     updated = skipped = failed = 0
-
-    #Get Parent Collection:
-    parent_collection = reader.get_collection(settings.koillection_collection)
-
-    #Get Child Collections:
-    child_collections = reader.list_child_collections(parent_collection["id"])
-
-    for child_collection in child_collections:
-        logger.info("Syncing child collection %r (%s)", child_collection.get("title"), child_collection["id"])
-
-        collection = reader.get_collection(child_collection["id"])
-        logger.info("Syncing collection %r (%s)", collection.get("title"), collection["id"])
-
-        items = reader.list_items(collection["id"])
-        if args.limit:
-            items = items[: args.limit]
-        logger.info("Found %d item(s) to process", len(items))
-
-        for item in items:
-            try:
-                if sync_item(item, reader, writer, anilist, settings, auto_match=args.yes):
-                    updated += 1
-                else:
-                    skipped += 1
-            except Exception:
-                logger.exception("Failed to sync item %r", item.get("name"))
-                failed += 1
+    for series_collection in series_list:
+        try:
+            if sync_series(series_collection, writer, anilist, settings, auto_match=args.yes):
+                updated += 1
+            else:
+                skipped += 1
+        except Exception:
+            logger.exception("Failed to sync series %r", series_collection.get("title"))
+            failed += 1
 
     logger.info("Done. updated=%d skipped=%d failed=%d", updated, skipped, failed)
     return 1 if failed else 0

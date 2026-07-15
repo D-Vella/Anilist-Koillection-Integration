@@ -9,20 +9,37 @@ https://github.com/benjaminjonard/koillection/wiki/API
 
 ## How it works
 
-For every item in a chosen Koillection collection (manga, to start), the
-script searches AniList for a matching manga and writes its cover image and
-description back onto the Koillection item. A description doesn't exist as
-a built-in field on a Koillection item, so it's stored as a custom field
-("Datum") with the label configured by `KOILLECTION_DESCRIPTION_LABEL`.
+This expects a Koillection layout where a parent collection (e.g. "Manga")
+has one sub-collection per series (e.g. "Manga/Fly Me to the Moon"), with
+owned volumes stored as items inside each series. AniList only has metadata
+at the series level, not per-volume, so for every child collection of the
+configured parent the script searches AniList for a matching manga and
+writes back onto that **series collection**:
+
+- its cover image, via the collection's image upload endpoint
+- a description built by concatenating the AniList synopsis, the average
+  score and status, and a footer noting the retrieval date, e.g.:
+
+  ```
+  A slice-of-life romantic comedy about two co-workers...
+
+  Score: 78/100 | Status: Finished
+
+  Data from AniList API retrieved 2026-07-15
+  ```
+
+A description doesn't exist as a built-in field on a Koillection
+collection, so it's stored as a custom field ("Datum") with the label
+configured by `KOILLECTION_DESCRIPTION_LABEL`.
 
 The project is split into four files:
 
-| File                    | Responsibility                                                |
-|--------------------------|----------------------------------------------------------------|
-| `koillection_reader.py`  | JWT auth + reading a collection and its items from Koillection |
-| `anilist_client.py`      | Searching AniList and fetching manga description/cover image   |
-| `koillection_writer.py`  | Uploading the item image and upserting the description field   |
-| `main.py`                | Control script that ties the three together                    |
+| File                    | Responsibility                                                        |
+|--------------------------|------------------------------------------------------------------------|
+| `koillection_reader.py`  | JWT auth + reading a parent collection and its child series from Koillection |
+| `anilist_client.py`      | Searching AniList and fetching description/score/status/cover image    |
+| `koillection_writer.py`  | Uploading the series cover image and upserting the description field   |
+| `main.py`                | Control script that ties the three together                           |
 
 `config.py` loads settings from a `.env` file (see `.env.example`).
 
@@ -41,7 +58,7 @@ cp .env.example .env
 ```bash
 python main.py                 # interactive: confirm ambiguous AniList matches
 python main.py --yes           # accept the best AniList match automatically
-python main.py --limit 5 -v    # dry-run friendly test on a handful of items
+python main.py --limit 5 -v    # dry-run friendly test on a handful of series
 ```
 
 Set `DRY_RUN=true` in `.env` to preview what would change without writing
