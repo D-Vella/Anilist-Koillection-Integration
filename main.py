@@ -120,24 +120,34 @@ def main() -> int:
         timeout=settings.request_timeout,
     )
 
-    collection = reader.get_collection(settings.koillection_collection)
-    logger.info("Syncing collection %r (%s)", collection.get("title"), collection["id"])
-
-    items = reader.list_items(collection["id"])
-    if args.limit:
-        items = items[: args.limit]
-    logger.info("Found %d item(s) to process", len(items))
-
     updated = skipped = failed = 0
-    for item in items:
-        try:
-            if sync_item(item, reader, writer, anilist, settings, auto_match=args.yes):
-                updated += 1
-            else:
-                skipped += 1
-        except Exception:
-            logger.exception("Failed to sync item %r", item.get("name"))
-            failed += 1
+
+    #Get Parent Collection:
+    parent_collection = reader.get_collection(settings.koillection_collection)
+
+    #Get Child Collections:
+    child_collections = reader.list_child_collections(parent_collection["id"])
+
+    for child_collection in child_collections:
+        logger.info("Syncing child collection %r (%s)", child_collection.get("title"), child_collection["id"])
+
+        collection = reader.get_collection(child_collection["id"])
+        logger.info("Syncing collection %r (%s)", collection.get("title"), collection["id"])
+
+        items = reader.list_items(collection["id"])
+        if args.limit:
+            items = items[: args.limit]
+        logger.info("Found %d item(s) to process", len(items))
+
+        for item in items:
+            try:
+                if sync_item(item, reader, writer, anilist, settings, auto_match=args.yes):
+                    updated += 1
+                else:
+                    skipped += 1
+            except Exception:
+                logger.exception("Failed to sync item %r", item.get("name"))
+                failed += 1
 
     logger.info("Done. updated=%d skipped=%d failed=%d", updated, skipped, failed)
     return 1 if failed else 0

@@ -99,6 +99,9 @@ class KoillectionReader:
 
     def list_items(self, collection_id: str) -> list[dict[str, Any]]:
         return list(self.client.paginate(f"/api/collections/{collection_id}/items"))
+    
+    def list_child_collections(self, parent_id: str) -> list[dict[str, Any]]:
+        return list(self.client.paginate(f"/api/collections/{parent_id}/children"))
 
     def list_item_data(self, item_id: str) -> list[dict[str, Any]]:
         return list(self.client.paginate(f"/api/items/{item_id}/data"))
