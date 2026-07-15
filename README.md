@@ -32,6 +32,23 @@ A description doesn't exist as a built-in field on a Koillection
 collection, so it's stored as a custom field ("Datum") with the label
 configured by `KOILLECTION_DESCRIPTION_LABEL`.
 
+### Disambiguating titles
+
+Some series titles aren't unique on AniList (there's more than one manga
+called "Fly Me to the Moon", for example), so title search alone can't
+always be trusted. Each series collection can carry an "AniList ID" custom
+field (label configured by `KOILLECTION_ANILIST_ID_LABEL`):
+
+- If it's set, that exact AniList entry is fetched directly and the title
+  search is skipped entirely.
+- If it's missing, or the id no longer resolves on AniList, the script
+  falls back to a title search and writes the id of whatever it picked
+  back into that field, so the next run is direct and stable.
+- If a search ever picks the wrong series, just open the item in
+  Koillection and correct the AniList ID field by hand (look the right one
+  up at anilist.co) - the next run will use your correction and won't
+  touch it again.
+
 The project is split into four files:
 
 | File                    | Responsibility                                                        |

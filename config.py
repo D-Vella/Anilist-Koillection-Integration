@@ -35,6 +35,7 @@ class Settings:
     koillection_password: str
     koillection_collection: str
     description_label: str
+    anilist_id_label: str
     anilist_api_url: str
     anilist_request_delay: float
     overwrite_existing: bool
@@ -49,6 +50,7 @@ class Settings:
             koillection_password=_require("KOILLECTION_PASSWORD"),
             koillection_collection=_require("KOILLECTION_COLLECTION"),
             description_label=os.getenv("KOILLECTION_DESCRIPTION_LABEL", "Description"),
+            anilist_id_label=os.getenv("KOILLECTION_ANILIST_ID_LABEL", "AniList ID"),
             anilist_api_url=os.getenv("ANILIST_API_URL", "https://graphql.anilist.co"),
             anilist_request_delay=_env_float("ANILIST_REQUEST_DELAY", 2.0),
             overwrite_existing=_env_bool("OVERWRITE_EXISTING", False),

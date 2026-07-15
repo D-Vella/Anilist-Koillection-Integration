@@ -6,7 +6,16 @@ Moon"), with owned volumes as items inside each series. AniList only has
 metadata at the series level, so for every child collection this looks up
 the matching manga on AniList and writes its cover image and a description
 (AniList synopsis + score + status + a retrieval footer) onto that series
-collection. Configure the .env file (see .env.example) before running:
+collection.
+
+Some titles are ambiguous on AniList (multiple series share a name), so
+each series collection can carry an "AniList ID" custom field. If it's set,
+that exact AniList entry is used directly; if it's missing or no longer
+resolves, the script falls back to a title search and writes the id it
+picked back into that field so future runs skip the search. If a search
+ever picks the wrong series, just edit the AniList ID field by hand.
+
+Configure the .env file (see .env.example) before running:
 
     python main.py
     python main.py --yes            # accept the best AniList match automatically
@@ -86,8 +95,21 @@ def build_description(match: MangaMatch) -> str:
     return "\n\n".join(parts)
 
 
+def resolve_anilist_id(existing_data: list[dict], label: str) -> int | None:
+    datum = next((d for d in existing_data if d.get("label") == label), None)
+    value = (datum or {}).get("value")
+    if not value:
+        return None
+    try:
+        return int(str(value).strip())
+    except ValueError:
+        logger.warning("%r field contains a non-numeric value %r, ignoring", label, value)
+        return None
+
+
 def sync_series(
     series_collection: dict,
+    reader: KoillectionReader,
     writer: KoillectionWriter,
     anilist: AnilistClient,
     settings: Settings,
@@ -96,13 +118,22 @@ def sync_series(
     name = series_collection.get("title", "")
     collection_id = series_collection["id"]
 
-    matches = anilist.search_manga(name)
-    match = choose_match(name, matches, auto=auto_match)
+    existing_data = reader.list_collection_data(collection_id)
+    anilist_id = resolve_anilist_id(existing_data, settings.anilist_id_label)
+
+    match = anilist.get_manga_by_id(anilist_id) if anilist_id is not None else None
+    if anilist_id is not None and match is None:
+        logger.warning("%r's AniList ID %s did not resolve, falling back to title search", name, anilist_id)
+
+    needs_id_write = match is None
     if match is None:
-        return False
+        matches = anilist.search_manga(name)
+        match = choose_match(name, matches, auto=auto_match)
+        if match is None:
+            return False
 
     if settings.dry_run:
-        logger.info("[dry-run] Would update %r with AniList match %r", name, match.title)
+        logger.info("[dry-run] Would update %r with AniList match %r (#%s)", name, match.title, match.id)
         return True
 
     needs_image = settings.overwrite_existing or not series_collection.get("image")
@@ -114,6 +145,9 @@ def sync_series(
 
     description = build_description(match)
     writer.upsert_collection_description(collection_id, description, overwrite=settings.overwrite_existing)
+
+    if needs_id_write:
+        writer.upsert_anilist_id(collection_id, match.id)
 
     logger.info("Updated %r <- AniList #%s %r", name, match.id, match.title)
     return True
@@ -132,7 +166,9 @@ def main() -> int:
         timeout=settings.request_timeout,
     )
     reader = KoillectionReader(client)
-    writer = KoillectionWriter(client, description_label=settings.description_label)
+    writer = KoillectionWriter(
+        client, description_label=settings.description_label, anilist_id_label=settings.anilist_id_label
+    )
     anilist = AnilistClient(
         api_url=settings.anilist_api_url,
         request_delay=settings.anilist_request_delay,
@@ -150,7 +186,7 @@ def main() -> int:
     updated = skipped = failed = 0
     for series_collection in series_list:
         try:
-            if sync_series(series_collection, writer, anilist, settings, auto_match=args.yes):
+            if sync_series(series_collection, reader, writer, anilist, settings, auto_match=args.yes):
                 updated += 1
             else:
                 skipped += 1
