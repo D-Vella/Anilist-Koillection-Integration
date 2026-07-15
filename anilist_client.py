@@ -33,6 +33,20 @@ query ($search: String, $perPage: Int) {
 }
 """
 
+BY_ID_QUERY = """
+query ($id: Int) {
+  Media(id: $id, type: MANGA) {
+    id
+    title { romaji english native }
+    description(asHtml: false)
+    coverImage { extraLarge large }
+    status
+    averageScore
+    siteUrl
+  }
+}
+"""
+
 STATUS_LABELS = {
     "FINISHED": "Finished",
     "RELEASING": "Releasing",
@@ -86,6 +100,20 @@ class MangaMatch:
     score: float
 
 
+def _to_match(entry: dict, score: float) -> MangaMatch:
+    cover = entry.get("coverImage") or {}
+    return MangaMatch(
+        id=entry["id"],
+        title=_best_title(entry.get("title")),
+        description=clean_description(entry.get("description")),
+        cover_image_url=cover.get("extraLarge") or cover.get("large"),
+        status=entry.get("status"),
+        average_score=entry.get("averageScore"),
+        site_url=entry.get("siteUrl", ""),
+        score=score,
+    )
+
+
 class AnilistClient:
     def __init__(
         self,
@@ -131,25 +159,27 @@ class AnilistClient:
         data = self._post(SEARCH_QUERY, {"search": title, "perPage": limit})
         media = data.get("Page", {}).get("media", [])
 
-        matches = []
-        for entry in media:
-            entry_title = _best_title(entry.get("title"))
-            cover = entry.get("coverImage") or {}
-            matches.append(
-                MangaMatch(
-                    id=entry["id"],
-                    title=entry_title,
-                    description=clean_description(entry.get("description")),
-                    cover_image_url=cover.get("extraLarge") or cover.get("large"),
-                    status=entry.get("status"),
-                    average_score=entry.get("averageScore"),
-                    site_url=entry.get("siteUrl", ""),
-                    score=_similarity(title, entry_title),
-                )
-            )
-
+        matches = [_to_match(entry, score=_similarity(title, _best_title(entry.get("title")))) for entry in media]
         matches.sort(key=lambda m: m.score, reverse=True)
         return matches
+
+    def get_manga_by_id(self, anilist_id: int) -> MangaMatch | None:
+        """Fetch a manga directly by AniList id, e.g. from a known-good override.
+
+        Returns None (rather than raising) on any failure - an unknown,
+        deleted, or invalid id should be treated as "couldn't use this",
+        so the caller can fall back to a title search.
+        """
+        try:
+            data = self._post(BY_ID_QUERY, {"id": anilist_id})
+        except (requests.HTTPError, RuntimeError) as exc:
+            logger.warning("AniList lookup for id %s failed (%s)", anilist_id, exc)
+            return None
+
+        entry = data.get("Media")
+        if not entry:
+            return None
+        return _to_match(entry, score=1.0)
 
     def download_cover_image(self, match: MangaMatch) -> bytes | None:
         if not match.cover_image_url:
